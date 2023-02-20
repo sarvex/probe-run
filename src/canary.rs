@@ -45,8 +45,9 @@ const CANARY_U32: u32 = u32::from_le_bytes([CANARY_U8, CANARY_U8, CANARY_U8, CAN
 #[derive(Clone, Copy)]
 pub struct Canary {
     address: u32,
-    size: u32,
     data_below_stack: bool,
+    size: u32,
+    size_kb: f64,
 }
 
 impl Canary {
@@ -55,54 +56,60 @@ impl Canary {
     /// Assumes that the target was reset-halted.
     pub fn install(
         core: &mut Core,
-        target_info: &TargetInfo,
         elf: &Elf,
+        target_info: &TargetInfo,
     ) -> Result<Option<Self>, anyhow::Error> {
-        let canary = match Self::prepare(&target_info.stack_info, elf) {
+        let canary = match Self::prepare(elf, &target_info.stack_info) {
             Some(canary) => canary,
             None => return Ok(None),
         };
 
-        let size_kb = canary.size_kb();
-
-        // Painting 100KB or more takes a few seconds, so provide user feedback.
-        log::info!("painting {size_kb:.2} KiB of RAM for stack usage estimation");
-
         let start = Instant::now();
+
+        // paint stack
         paint_subroutine::execute(core, canary.address, canary.size)?;
+
         let seconds = start.elapsed().as_secs_f64();
-        log::trace!(
-            "setting up canary took {seconds:.3}s ({:.2} KiB/s)",
-            size_kb / seconds
+        log::debug!(
+            "painting {:.2} KiB of RAM took {seconds:.3}s ({:.2} KiB/s)",
+            canary.size_kb,
+            canary.size_kb / seconds
         );
 
         Ok(Some(canary))
     }
 
-    /// Detect if the stack canary was touched.
-    pub fn touched(self, core: &mut Core, elf: &Elf) -> anyhow::Result<bool> {
-        let size_kb = self.size_kb();
-        log::info!("reading {size_kb:.2} KiB of RAM for stack usage estimation",);
+    /// Measure the stack usage.
+    ///
+    /// Returns `true` if a stack overflow is likely.
+    pub fn measure(self, core: &mut Core, elf: &Elf) -> anyhow::Result<bool> {
         let start = Instant::now();
 
+        // measure stack usage
         let touched_address = measure_subroutine::execute(core, self.address, self.size)?;
 
         let seconds = start.elapsed().as_secs_f64();
         log::trace!(
             "reading canary took {seconds:.3}s ({:.2} KiB/s)",
-            size_kb / seconds
+            self.size_kb / seconds
         );
-
         log::debug!("canary was touched at {touched_address:#010X}");
+
         let min_stack_usage = elf.vector_table.initial_stack_pointer - touched_address;
         let used_kb = min_stack_usage as f64 / 1024.0;
-        let pct = used_kb / size_kb * 100.0;
+        let pct = used_kb / self.size_kb * 100.0;
         log::info!(
-            "program has used at least {used_kb:.2}/{size_kb:.2} KiB ({pct:.1}%) of stack space"
+            "program has used at least {used_kb:.2}/{:.2} KiB ({pct:.1}%) of stack space",
+            self.size_kb
         );
 
-        if pct > 90.0 && self.data_below_stack {
-            log::warn!("data segments might be corrupted due to stack overflow");
+        // stack touched?
+        //
+        // We consider >90% stack usage a potential stack overflow
+        if pct > 90.0 {
+            if self.data_below_stack {
+                log::warn!("data segments might be corrupted due to stack overflow");
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -112,7 +119,7 @@ impl Canary {
     /// Prepare, but not place the canary.
     ///
     /// If this succeeds, we have all the information we need in order to place the canary.
-    fn prepare(stack_info: &Option<StackInfo>, elf: &Elf) -> Option<Self> {
+    fn prepare(elf: &Elf, stack_info: &Option<StackInfo>) -> Option<Self> {
         let stack_info = match stack_info {
             Some(stack_info) => stack_info,
             None => {
@@ -126,8 +133,8 @@ impl Canary {
             return None;
         }
 
-        let stack_start = *stack_info.range.start();
-        let size = *stack_info.range.end() - stack_start;
+        let address = *stack_info.range.start();
+        let size = *stack_info.range.end() - address;
 
         log::debug!(
             "{size} bytes of stack available ({:#010X} ..= {:#010X})",
@@ -136,14 +143,11 @@ impl Canary {
         );
 
         Some(Canary {
-            address: stack_start,
-            size,
+            address,
             data_below_stack: stack_info.data_below_stack,
+            size,
+            size_kb: size as f64 / 1024.0,
         })
-    }
-
-    fn size_kb(self) -> f64 {
-        self.size as f64 / 1024.0
     }
 }
 
@@ -310,9 +314,8 @@ mod measure_subroutine {
         assert_subroutine!(low_addr, stack_size, self::SUBROUTINE.len() as u32);
 
         // use probe to search through the memory the subroutine will be written to
-        match self::search_with_probe(core, low_addr)? {
-            Some(addr) => return Ok(addr), // if we find a touched value, return early ...
-            None => {}                     // ... otherwise we continue
+        if let Some(addr) = self::search_with_probe(core, low_addr)? {
+            return Ok(addr); // return early, if we find a touched value
         }
 
         super::execute_subroutine(core, low_addr, stack_size, self::SUBROUTINE)?;

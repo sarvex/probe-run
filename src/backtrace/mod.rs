@@ -30,33 +30,33 @@ impl From<&String> for BacktraceOptions {
 pub struct Settings<'p> {
     pub backtrace_limit: u32,
     pub backtrace: BacktraceOptions,
-    pub canary_touched: bool,
     pub current_dir: &'p Path,
     pub halted_due_to_signal: bool,
     pub include_addresses: bool,
     pub shorten_paths: bool,
+    pub stack_overflow: bool,
 }
 
 impl<'p> Settings<'p> {
     pub fn new(
-        canary_touched: bool,
         current_dir: &'p Path,
         halted_due_to_signal: bool,
         opts: &Opts,
+        stack_overflow: bool,
     ) -> Self {
         Self {
             backtrace_limit: opts.backtrace_limit,
             backtrace: (&opts.backtrace).into(),
-            canary_touched,
             current_dir,
             halted_due_to_signal,
             include_addresses: opts.verbose > 0,
             shorten_paths: opts.shorten_paths,
+            stack_overflow,
         }
     }
 
     fn panic_present(&self) -> bool {
-        self.canary_touched || self.halted_due_to_signal
+        self.stack_overflow || self.halted_due_to_signal
     }
 }
 
