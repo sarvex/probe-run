@@ -133,39 +133,40 @@ impl Canary {
             return None;
         }
 
-        let address = *stack_info.range.start();
-        let size = *stack_info.range.end() - address;
+        let stack_addr = *stack_info.range.start();
+        let stack_size = *stack_info.range.end() - stack_addr;
 
         log::debug!(
-            "{size} bytes of stack available ({:#010X} ..= {:#010X})",
+            "{stack_size} bytes of stack available ({:#010X} ..= {:#010X})",
             stack_info.range.start(),
             stack_info.range.end(),
         );
 
+        // Assert 4-byte-alignment and that subroutine fits inside stack.
+        assert_eq!(stack_addr % 4, 0, "low_addr needs to be 4-byte-aligned");
+        assert_eq!(stack_size % 4, 0, "stack_size needs to be 4-byte-aligned");
+        assert_eq!(
+            paint_subroutine::size() % 4,
+            0,
+            "paint subroutine needs to be 4-byte-aligned"
+        );
+        assert_eq!(
+            measure_subroutine::size() % 4,
+            0,
+            "measure subroutine needs to be 4-byte-aligned"
+        );
+        if (stack_size < paint_subroutine::size()) || (stack_size < measure_subroutine::size()) {
+            log::warn!("subroutines do not fit in stack; not placing stack canary");
+            return None;
+        }
+
         Some(Canary {
-            address,
+            address: stack_addr,
             data_below_stack: stack_info.data_below_stack,
-            size,
-            size_kb: size as f64 / 1024.0,
+            size: stack_size,
+            size_kb: stack_size as f64 / 1024.0,
         })
     }
-}
-
-/// Assert 4-byte-alignment and that subroutine fits inside stack.
-macro_rules! assert_subroutine {
-    ($low_addr:expr, $stack_size:expr, $subroutine_size:expr) => {
-        assert_eq!($low_addr % 4, 0, "low_addr needs to be 4-byte-aligned");
-        assert_eq!($stack_size % 4, 0, "stack_size needs to be 4-byte-aligned");
-        assert_eq!(
-            $subroutine_size % 4,
-            0,
-            "subroutine needs to be 4-byte-aligned"
-        );
-        assert!(
-            $subroutine_size < $stack_size,
-            "subroutine does not fit inside stack"
-        );
-    };
 }
 
 /// Paint-stack subroutine.
@@ -215,7 +216,6 @@ mod paint_subroutine {
     /// paints the whole memory, except of itself. After the subroutine finishes
     /// executing we overwrite the subroutine using the probe.
     pub fn execute(core: &mut Core, low_addr: u32, stack_size: u32) -> Result<(), probe_rs::Error> {
-        assert_subroutine!(low_addr, stack_size, self::SUBROUTINE.len() as u32);
         super::execute_subroutine(core, low_addr, stack_size, self::SUBROUTINE)?;
         self::overwrite_subroutine(core, low_addr)?;
         Ok(())
@@ -236,6 +236,10 @@ mod paint_subroutine {
         0x00, 0xbe, // bkpt     0x0000
         0x00, 0xbe, // bkpt     0x0000 (padding instruction)
     ];
+
+    pub const fn size() -> u32 {
+        self::SUBROUTINE.len() as _
+    }
 }
 
 /// Measure-stack subroutine.
@@ -311,8 +315,6 @@ mod measure_subroutine {
         low_addr: u32,
         stack_size: u32,
     ) -> Result<u32, probe_rs::Error> {
-        assert_subroutine!(low_addr, stack_size, self::SUBROUTINE.len() as u32);
-
         // use probe to search through the memory the subroutine will be written to
         if let Some(addr) = self::search_with_probe(core, low_addr)? {
             return Ok(addr); // return early, if we find a touched value
@@ -364,6 +366,10 @@ mod measure_subroutine {
         0x00, 0xbe, // bkpt     0x0000
         0x00, 0xbe, // bkpt     0x0000 (padding instruction)
     ];
+
+    pub const fn size() -> u32 {
+        self::SUBROUTINE.len() as _
+    }
 }
 
 /// Prepare and run subroutine. Also clean up afterwards.
