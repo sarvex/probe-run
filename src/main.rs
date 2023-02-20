@@ -71,8 +71,8 @@ fn run_target_program(elf_path: &Path, chip_name: &str, opts: &cli::Opts) -> any
     let target_info = TargetInfo::new(elf, memory_map, probe_target, stack_start)?;
 
     // install stack canary
-    let canary = Canary::install(core, &target_info, elf, opts.measure_stack)?;
-    if opts.measure_stack && canary.is_none() {
+    let canary = Canary::install(core, &target_info, elf)?;
+    if canary.is_none() {
         bail!("failed to set up stack measurement");
     }
 

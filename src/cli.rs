@@ -59,10 +59,6 @@ pub struct Opts {
     #[arg(long)]
     list_probes: bool,
 
-    /// Whether to measure the program's stack consumption.
-    #[arg(long)]
-    pub measure_stack: bool,
-
     /// Skip writing the application binary to flash.
     #[arg(
         long,
