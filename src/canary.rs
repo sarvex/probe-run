@@ -93,12 +93,8 @@ impl Canary {
             size_kb / seconds
         );
 
-        let min_stack_usage = touched_address.map(|touched_address| {
-            log::debug!("canary was touched at {touched_address:#010X}");
-            elf.vector_table.initial_stack_pointer - touched_address
-        });
-
-        let min_stack_usage = min_stack_usage.unwrap_or(0);
+        log::debug!("canary was touched at {touched_address:#010X}");
+        let min_stack_usage = elf.vector_table.initial_stack_pointer - touched_address;
         let used_kb = min_stack_usage as f64 / 1024.0;
         let pct = used_kb / size_kb * 100.0;
         log::info!(
@@ -289,8 +285,8 @@ mod measure_subroutine {
 
     /// Search for lowest touched byte in memory.
     ///
-    /// The returned `Option<u32>` is `None`, if the memory is untouched. Otherwise it
-    /// gives the position of the lowest byte which isn't equal to the pattern anymore.
+    /// The returned `u32` gives the position of the lowest byte which isn't equal to
+    /// the pattern anymore.
     ///
     /// # Safety
     ///
@@ -304,20 +300,19 @@ mod measure_subroutine {
     /// want to place the subroutine to check if the stack usage got that far. If we
     /// find a touched byte we return it. Otherwise we place the subroutine in this
     /// memory region and execute it. After the subroutine finishes we read out the
-    /// address of the lowest touched 4-byte-word from the register r0. If r0 is `0`
-    /// we return `None`. Otherwise we process it to get the address of the lowest
-    /// byte, not only 4-byte-word.
+    /// address of the lowest touched 4-byte-word from the register r0. We process it
+    /// to get the address of the lowest byte, not only 4-byte-word.
     pub fn execute(
         core: &mut Core,
         low_addr: u32,
         stack_size: u32,
-    ) -> Result<Option<u32>, probe_rs::Error> {
+    ) -> Result<u32, probe_rs::Error> {
         assert_subroutine!(low_addr, stack_size, self::SUBROUTINE.len() as u32);
 
         // use probe to search through the memory the subroutine will be written to
         match self::search_with_probe(core, low_addr)? {
-            addr @ Some(_) => return Ok(addr), // if we find a touched value, return early ...
-            None => {}                         // ... otherwise we continue
+            Some(addr) => return Ok(addr), // if we find a touched value, return early ...
+            None => {}                     // ... otherwise we continue
         }
 
         super::execute_subroutine(core, low_addr, stack_size, self::SUBROUTINE)?;
@@ -339,22 +334,19 @@ mod measure_subroutine {
     /// Read out result from register r0 and process it to get lowest touched byte.
     ///
     /// Happens after the subroutine finishes.
-    fn get_result(core: &mut Core) -> Result<Option<u32>, probe_rs::Error> {
+    fn get_result(core: &mut Core) -> Result<u32, probe_rs::Error> {
         // get the address of the lowest touched 4-byte-word
-        let word_addr = match core.read_core_reg(RegisterId(0))? {
-            0 => return Ok(None),
-            n => n,
-        };
+        let word_addr = core.read_core_reg(RegisterId(0))?;
 
         // take a closer look at word, to get address of lowest touched byte
         let offset = core
-            .read_word_32(word_addr as u64)?
+            .read_word_32(word_addr)?
             .to_le_bytes()
             .into_iter()
             .position(|b| b != CANARY_U8)
             .unwrap();
 
-        Ok(Some(word_addr + offset as u32))
+        Ok((word_addr + offset as u64) as u32)
     }
 
     const SUBROUTINE: [u8; 20] = [
@@ -375,7 +367,7 @@ mod measure_subroutine {
 ///
 /// # How?
 ///
-/// We place the parameters in the registers (see table below), place the subroutien
+/// We place the parameters in the registers (see table below), place the subroutine
 /// in memory, set the program counter to the beginning of the subroutine, execute
 /// the subroutine and reset the program counter afterwards.
 ///
