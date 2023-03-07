@@ -23,7 +23,7 @@ ack(m=9, n=0, SP=2000be58)
 ack(m=8, n=1, SP=20007e38)
 ack(m=8, n=0, SP=20003e18)
 ────────────────────────────────────────────────────────────────────────────────
-(HOST) WARN  program has used at least 240.62/254.93 KiB (94.4%) of stack space
+(HOST) INFO  program has used at least 240.62/254.93 KiB (94.4%) of stack space
 (HOST) WARN  data segments might be corrupted due to stack overflow
 stack backtrace:
    0: HardFaultTrampoline
