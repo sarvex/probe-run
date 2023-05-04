@@ -6,9 +6,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [Unreleased]
 
+- [#xxx] Do not panic if locations do not contain the frame
 - [#399] Update link shown in error message
 - [#398] Handle reset vector not pointing to ELF symbol
 
+[#xxx]: https://github.com/knurling-rs/probe-run/pull/xxx
 [#399]: https://github.com/knurling-rs/probe-run/pull/399
 [#398]: https://github.com/knurling-rs/probe-run/pull/398
 
